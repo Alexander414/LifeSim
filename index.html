@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Life Loop v4 (Modular Base)</title>
+  <style>
+    :root{--bg:#0b0f17;--panel:#111827;--panel2:#0f172a;--text:#e5e7eb;--muted:#9ca3af;--border:#1f2937;--accent:#60a5fa;}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:radial-gradient(1200px 600px at 20% 0%, #12224a, var(--bg));color:var(--text)}
+    header{padding:16px 18px;border-bottom:1px solid var(--border);background:rgba(17,24,39,.75);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10}
+    header .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    h1{margin:0;font-size:15px}
+    .sub{font-size:12px;color:var(--muted)}
+    main{padding:18px;max-width:1200px;margin:0 auto}
+    .grid{display:grid;gap:14px;grid-template-columns:360px 1fr}
+    @media(max-width:980px){.grid{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(17,24,39,.95),rgba(15,23,42,.95));border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .card h2{margin:0 0 10px 0;font-size:13px;color:#dbeafe}
+    label{display:block;font-size:11px;color:var(--muted);margin:8px 0 5px}
+    input,select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);outline:none}
+    button{cursor:pointer;padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:rgba(96,165,250,.18);color:var(--text)}
+    button.secondary{background:rgba(255,255,255,.06)}
+    button.danger{background:rgba(251,113,133,.18)}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row>*{flex:1}
+    .divider{height:1px;background:var(--border);margin:12px 0}
+
+    /* Game layout */
+    .pillbar{display:flex;gap:8px;flex-wrap:wrap}
+    .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;border:1px solid var(--border);background:rgba(0,0,0,.18);font-size:12px;color:var(--muted)}
+    .pill b{color:var(--text)}
+
+    .tabs{display:flex;gap:8px;flex-wrap:wrap}
+    .tab{padding:8px 10px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.04);font-size:12px;color:var(--muted)}
+    .tab.active{background:rgba(96,165,250,.18);color:var(--text)}
+
+    .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    @media(max-width:700px){.actions{grid-template-columns:1fr}}
+    .action{border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(0,0,0,.18);display:flex;flex-direction:column;gap:8px}
+    .action b{font-size:13px}
+    .small{font-size:11px;color:var(--muted);line-height:1.45}
+
+    .logFilters{display:flex;gap:10px;flex-wrap:wrap}
+    .log{max-height:360px;overflow:auto;font-size:12px;line-height:1.45;padding-right:6px}
+    .entry{padding:8px 10px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin-bottom:8px}
+    .entry .t{font-size:11px;color:var(--muted);margin-bottom:2px}
+
+    .queue{max-height:220px;overflow:auto;padding-right:6px}
+    .qItem{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:12px;background:rgba(0,0,0,.16);margin-top:8px}
+
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .hl{color:#dbeafe}
+  </style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <div>
+      <h1>Life Loop v4 <span class="sub">Modular base (globals + classic scripts)</span></h1>
+      <div class="sub">Stable skeleton: state, actions, queue, typed log with filters, save/load hooks.</div>
+    </div>
+    <div class="pillbar" id="topPills"></div>
+  </div>
+</header>
+
+<main>
+  <div id="screenLanding" class="grid">
+    <section class="card">
+      <h2>New Life</h2>
+      <div class="small">Meta points: <span class="hl mono" id="metaPoints">0</span></div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input id="inpName" type="text" maxlength="20" placeholder="e.g., Alex" />
+        </div>
+        <div>
+          <label>Gender</label>
+          <select id="selGender">
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Family Name (required)</label>
+          <input id="inpFamilyName" type="text" maxlength="18" placeholder="e.g., Valen" />
+          <div class="small">If blank, a name will be generated.</div>
+        </div>
+        <div>
+          <label>Origin Background</label>
+          <select id="selFamily"></select>
+          <div class="small" id="familyDesc"></div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <button id="btnStart">Begin Life</button>
+        <button id="btnReset" class="secondary" title="Clears meta + world in this browser.">Reset Local Data</button>
+      </div>
+      <div class="small" id="bootStatus"></div>
+    </section>
+
+    <section class="card">
+      <h2>Notes</h2>
+      <ul class="small" style="margin:8px 0 0 18px">
+        <li>This base uses classic <span class="mono">&lt;script src="./js/..."&gt;</span> so it works locally and on a server.</li>
+        <li>We will layer in: travel, encounters popup, scaling/balance, and the story systems.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div id="screenGame" class="grid" style="display:none">
+    <section class="card">
+      <h2>Character</h2>
+      <div id="charList" class="small"></div>
+
+      <div class="divider"></div>
+
+      <h2>Queue</h2>
+      <div class="small">Max 10. Actions enqueue while a task runs.</div>
+      <div class="queue" id="queueList"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnClearQueue" class="secondary">Clear Queue</button>
+        <button id="btnAgeUp" class="secondary">Age Up (Skip)</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <h2>Save / Load</h2>
+      <div class="row">
+        <button id="btnSave" class="secondary">Save (Local)</button>
+        <button id="btnDownload" class="secondary">Save & Download</button>
+        <button id="btnLoad" class="secondary">Load</button>
+        <input id="fileLoad" type="file" accept="application/json" style="display:none" />
+      </div>
+
+      <div class="divider"></div>
+      <button id="btnGiveUp" class="danger">End Life</button>
+      <div class="small">Ends the run and shows a summary (stub in base).</div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="align-items:flex-start;justify-content:space-between">
+        <div>
+          <h2>Locations</h2>
+          <div class="small">Home/Town/Guild are placeholders in the base. Travel + towns come next.</div>
+        </div>
+        <div class="tabs" id="locTabs"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div id="locationPanel"></div>
+
+      <div class="divider"></div>
+
+      <div class="row" style="align-items:center;justify-content:space-between">
+        <h2 style="margin:0">Log</h2>
+        <div class="logFilters" id="logFilters"></div>
+      </div>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</main>
+
+<!-- Scripts (classic / globals) -->
+<script src="./js/state.js"></script>
+<script src="./js/log.js"></script>
+<script src="./js/actions.js"></script>
+<script src="./js/ui.js"></script>
+<script>
+  // Boot entrypoint
+  window.addEventListener('DOMContentLoaded', () => {
+    try {
+      LL_UI.boot();
+      document.getElementById('bootStatus').textContent = 'Boot OK.';
+    } catch (e) {
+      console.error(e);
+      document.getElementById('bootStatus').textContent = 'Boot failed. Check console.';
+    }
+  });
+</script>
+</body>
+</html>
