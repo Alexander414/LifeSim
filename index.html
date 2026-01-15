@@ -52,6 +52,10 @@
 
     .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
     .hl{color:#dbeafe}
+    .overlay{position:fixed;inset:0;background:rgba(4,8,16,.78);display:flex;align-items:center;justify-content:center;z-index:50}
+    .modal{max-width:520px;width:90%;background:linear-gradient(180deg,rgba(17,24,39,.98),rgba(15,23,42,.98));border:1px solid var(--border);border-radius:16px;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+    .modal h3{margin:0 0 8px 0;font-size:15px;color:#dbeafe}
+    .modal .small{margin-bottom:10px}
   </style>
 </head>
 <body>
@@ -132,6 +136,9 @@
         <button id="btnClearQueue" class="secondary">Clear Queue</button>
         <button id="btnAgeUp" class="secondary">Age Up (Skip)</button>
       </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnDebugEncounter" class="secondary">Trigger Encounter (Debug)</button>
+      </div>
 
       <div class="divider"></div>
 
@@ -171,6 +178,15 @@
     </section>
   </div>
 </main>
+
+<div id="encounterOverlay" class="overlay" style="display:none">
+  <div class="modal">
+    <h3 id="encounterTitle"></h3>
+    <div class="small" id="encounterDesc"></div>
+    <div class="divider"></div>
+    <div class="row" id="encounterOptions"></div>
+  </div>
+</div>
 
 <!-- Scripts (classic / globals) -->
 <script src="./js/state.js"></script>
