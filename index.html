@@ -11,7 +11,7 @@
   <div class="row">
     <div>
       <h1>Life Loop Prototype <span class="sub">(v4 modular HTML/JS)</span></h1>
-      <div class="sub">Kingdom map, travel, hidden content by age, and the first "Land Grant" story arc.</div>
+      <div class="sub">Kingdom map, travel, hidden content by age, and dynamic caravan events.</div>
     </div>
     <div class="kpi" id="topKpi"></div>
   </div>
@@ -43,7 +43,7 @@
         <div>
           <label>Family Name (required)</label>
           <input id="inpFamilyName" type="text" maxlength="18" placeholder="e.g., Valen" />
-          <div class="small">If blank, one will be generated. This name is used if you gain a town.</div>
+          <div class="small">If blank, one will be generated.</div>
         </div>
         <div>
           <label>Origin Background</label>
@@ -92,8 +92,7 @@
         <li><b>Guild registration</b> is visible everywhere, but requires <b>age 12+</b>.</li>
         <li><b>Hidden content</b>: Actions/quests are hidden until you meet their minimum age (except guild registration).</li>
         <li><b>Kingdom map</b>: You spawn in a random town each life. At 16+, you can <b>travel</b> between towns (10s real time).</li>
-        <li><b>Land Grant story</b>: Rare caravan rescue event can earn you your own town named after your family.</li>
-        <li><b>Town building</b>: In your granted town, you can build facilities that persist across future lives.</li>
+        <li><b>Caravan rescues</b>: Rare events can change your long-term story outcomes.</li>
       </ul>
       <div class="divider"></div>
       <div class="small">If something feels too generous or too strict, tell me which part and what you want the expected behavior to be.</div>
@@ -103,9 +102,7 @@
   <div id="screenGame" class="grid" style="display:none">
     <section class="card">
       <h2>Character</h2>
-      <div class="kpi" id="charKpi"></div>
-      <div class="divider"></div>
-      <div class="statgrid" id="statGrid"></div>
+      <div id="charList" class="small"></div>
 
       <div class="divider"></div>
 
@@ -173,7 +170,11 @@
 
       <div class="divider"></div>
 
-      <h2>Log</h2>
+      <div class="row" style="align-items:center; justify-content:space-between">
+        <h2>Log</h2>
+        <button id="btnTriggerEvent" class="secondary smallBtn" title="Debug: trigger a caravan event.">Trigger Event</button>
+      </div>
+      <div class="logFilters" id="logFilters"></div>
       <div class="log" id="log"></div>
     </section>
   </div>
@@ -189,6 +190,17 @@
         <button id="btnRestart">Reincarnate</button>
         <button id="btnCloseModal" class="secondary">Close</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modalOverlay" id="eventOverlay">
+  <div class="modal">
+    <div class="card">
+      <h2 id="eventTitle">Caravan Encounter</h2>
+      <div id="eventBody" class="small"></div>
+      <div class="divider"></div>
+      <div class="btnRow" id="eventOptions"></div>
     </div>
   </div>
 </div>

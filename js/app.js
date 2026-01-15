@@ -28,6 +28,8 @@ import { createActionsApi } from './actions.js';
   }
 
   function fmtTime(minutes){
+    const sign = minutes < 0 ? '-' : '';
+    minutes = Math.abs(minutes);
     const d = Math.floor(minutes / (60*24));
     const h = Math.floor((minutes - d*60*24)/60);
     const m = minutes % 60;
@@ -35,7 +37,7 @@ import { createActionsApi } from './actions.js';
     if(d>0) parts.push(`${d}d`);
     if(h>0 || d>0) parts.push(`${h}h`);
     parts.push(`${m}m`);
-    return parts.join(' ');
+    return sign + parts.join(' ');
   }
 
   function rankIndex(r){ return RANKS.indexOf(r); }
@@ -174,7 +176,11 @@ import { createActionsApi } from './actions.js';
       causeOfDeath: null,
 
       log: [],
+      logFilters: { queue:true, combat:true, story:true, travel:true },
       task: { running:false, actionId:null, actionName:null, startedAt:0, durationMs:0, locationId:null, townId:null },
+      eventLock: false,
+      caravanEvent: null,
+      travelPlanDest: null,
     };
   }
 
@@ -201,10 +207,10 @@ import { createActionsApi } from './actions.js';
 
   function stageConfig(stageIndex){
     const stages = [
-      { name:'Childhood', daysPerStep: 7, deathAgeFactor: 0.00 },
-      { name:'Teen',      daysPerStep: 10, deathAgeFactor: 0.01 },
-      { name:'Adult',     daysPerStep: 14, deathAgeFactor: 0.02 },
-      { name:'Elder',     daysPerStep: 14, deathAgeFactor: 0.05 },
+      { name:'Childhood', daysPerStep: 5, deathAgeFactor: 0.00 },
+      { name:'Teen',      daysPerStep: 7, deathAgeFactor: 0.01 },
+      { name:'Adult',     daysPerStep: 10, deathAgeFactor: 0.02 },
+      { name:'Elder',     daysPerStep: 12, deathAgeFactor: 0.05 },
     ];
     return stages[clamp(stageIndex,0,stages.length-1)];
   }
@@ -250,11 +256,12 @@ import { createActionsApi } from './actions.js';
 
     const ageCfg = stageConfig(s.stageIndex);
     const ageFactor = ageCfg.deathAgeFactor;
+    const fatigue = clamp(s.lifetimeAdventures / 350, 0, 0.08);
 
     const supplyMitigate = clamp(s.buffs.supplies, 0, 0.04);
     const classMitigate = clamp(mods.riskMitigate || 0, 0, 0.06);
 
-    let p = baseRisk + healthFactor + energyFactor + ageFactor;
+    let p = baseRisk + healthFactor + energyFactor + ageFactor + fatigue;
     p = p - powerMitigate - supplyMitigate - classMitigate - gMit;
     return clamp(p, 0.005, 0.85);
   }
@@ -281,9 +288,14 @@ import { createActionsApi } from './actions.js';
       { label:'Gold', value: goldPoints, detail:`(gold ${s.gold} ÷ 20, capped 50)` },
       { label:'Age', value: agePoints, detail:`(age ${s.age})` },
       { label:'Inventory', value: invPoints, detail:`(qty ${invQty} ÷ 3, capped 30)` },
-      { label:'Town Granted', value: townPoints, detail: s.ownedTownId ? '(land grant unlocked)' : '(none)' },
-      { label:'Town Facilities', value: facilityPoints, detail:`(${facilityCount} built)` },
     ];
+
+    if(s.ownedTownId){
+      parts.push(
+        { label:'Town Granted', value: townPoints, detail: '(land grant unlocked)' },
+        { label:'Town Facilities', value: facilityPoints, detail:`(${facilityCount} built)` },
+      );
+    }
 
     const total = Math.max(0, parts.reduce((a,p)=>a+p.value,0));
     return { total, parts };
@@ -370,8 +382,15 @@ import { createActionsApi } from './actions.js';
   // ---------------------------
   // Logging + Story
   // ---------------------------
-  function log(msg){
-    state.log.unshift({ t: nowHHMM(), msg });
+  const LOG_FILTERS = [
+    { id:'queue', label:'Queue' },
+    { id:'combat', label:'Combat' },
+    { id:'story', label:'Story' },
+    { id:'travel', label:'Travel' },
+  ];
+
+  function log(msg, type='general'){
+    state.log.unshift({ t: nowHHMM(), msg, type });
     state.log = state.log.slice(0, 180);
     render();
   }
@@ -379,7 +398,7 @@ import { createActionsApi } from './actions.js';
   function storyOnce(key, message){
     if(state.flags[key]) return;
     state.flags[key] = true;
-    log(`Story: ${message}`);
+    log(`Story: ${message}`, 'story');
   }
 
   // ---------------------------
@@ -397,19 +416,19 @@ import { createActionsApi } from './actions.js';
     count = clamp(count, 1, 10);
     const free = 10 - queueSize();
     if(free <= 0){
-      log('Queue is full (max 10).');
+      log('Queue is full (max 10).', 'queue');
       return;
     }
     const add = Math.min(free, count);
     for(let i=0;i<add;i++) state.queue.push({ locId, actionId, townId: state.currentTownId });
-    log(`Queued: ${actionName(locId, actionId, state.currentTownId)} x${add}.`);
+    log(`Queued: ${actionName(locId, actionId, state.currentTownId)} x${add}.`, 'queue');
     maybeStartNextFromQueue();
     render();
   }
 
   function clearQueue(){
     state.queue = [];
-    log('Queue cleared.');
+    log('Queue cleared.', 'queue');
     render();
   }
 
@@ -428,11 +447,11 @@ import { createActionsApi } from './actions.js';
       return list.some(a=>a.id===q.actionId);
     });
     const removed = before - state.queue.length;
-    if(removed > 0) log(`Travel safety: removed ${removed} queued task(s) not available in the new town.`);
+    if(removed > 0) log(`Travel safety: removed ${removed} queued task(s) not available in the new town.`, 'travel');
   }
 
   function maybeStartNextFromQueue(){
-    if(!state || state.task.running || !state.alive) return;
+    if(!state || state.task.running || !state.alive || state.eventLock) return;
 
     while(state.queue.length > 0){
       const next = state.queue[0];
@@ -443,7 +462,7 @@ import { createActionsApi } from './actions.js';
       }
       const ok = canStartAction(action, next.locId);
       if(!ok.ok){
-        log(`Skipped queued action "${action.name}": ${ok.why}`);
+        log(`Skipped queued action "${action.name}": ${ok.why}`, 'queue');
         state.queue.shift();
         continue;
       }
@@ -459,14 +478,16 @@ import { createActionsApi } from './actions.js';
   let taskTimer = null;
 
   function getPlannedTravelCost(){
-    const sel = $('selTravelTo');
-    const dest = sel ? sel.value : null;
+    const dest = state?.travelPlanDest || null;
     if(!dest || !state || !state.currentTownId) return 0;
     if(dest === state.currentTownId) return 0;
     return travelCostMinutes(state.currentTownId, dest);
   }
 
   function canStartAction(action, locationId){
+    if(state.eventLock){
+      return req(false, 'Resolve the caravan encounter first.');
+    }
     if(locationId === 'home' && state.homeLocked){
       return req(false, 'Home is locked. Earn gold and rent a room in Town.');
     }
@@ -475,13 +496,11 @@ import { createActionsApi } from './actions.js';
     if(!r.ok) return r;
 
     if(action.special === 'travel'){
-      const dest = $('selTravelTo')?.value || null;
+      const dest = state.travelPlanDest || null;
       if(!dest || dest === state.currentTownId) return req(false, 'Select a destination town.');
     }
 
     const timeCost = action.special === 'travel' ? getPlannedTravelCost() : (action.timeCostMins || 0);
-    if(state.stageRemainingMins < timeCost) return req(false, `Not enough stage time (need ${fmtTime(timeCost)}).`);
-
     return req(true);
   }
 
@@ -490,16 +509,16 @@ import { createActionsApi } from './actions.js';
 
     const ok = canStartAction(action, locationId);
     if(!ok.ok){
-      log(`Cannot do "${action.name}": ${ok.why}`);
+      log(`Cannot do "${action.name}": ${ok.why}`, 'general');
       return;
     }
 
     let travelTo = null;
     let timeCost = action.timeCostMins || 0;
     if(action.special === 'travel'){
-      travelTo = $('selTravelTo')?.value || null;
+      travelTo = state.travelPlanDest || null;
       if(!travelTo || travelTo === state.currentTownId){
-        log('Choose a destination town before traveling.');
+        log('Choose a destination town before traveling.', 'travel');
         return;
       }
       timeCost = travelCostMinutes(state.currentTownId, travelTo);
@@ -518,7 +537,7 @@ import { createActionsApi } from './actions.js';
     if(action.id === 'shopSupplies'){
       state.buffs.supplies = 0.03;
       storyOnce('bought_supplies', 'You realize preparation is its own kind of strength.');
-      log('You buy supplies. Next adventure is slightly safer.');
+      log('You buy supplies. Next adventure is slightly safer.', 'general');
     }
 
     state.task = {
@@ -537,7 +556,8 @@ import { createActionsApi } from './actions.js';
     if(action.adventure) state.lifetimeAdventures += 1;
 
     const prefix = fromQueue ? 'Auto-started' : 'Started';
-    log(`${prefix}: ${action.name} (${fmtTime(timeCost)}).`);
+    const logType = action.special === 'travel' ? 'travel' : (action.adventure ? 'combat' : 'general');
+    log(`${prefix}: ${action.name} (${fmtTime(timeCost)}).`, logType);
 
     if(taskTimer) clearInterval(taskTimer);
     taskTimer = setInterval(tickTask, 80);
@@ -577,35 +597,89 @@ import { createActionsApi } from './actions.js';
     for(const r of RANKS){ if(state.guild.xp >= thresholds[r]) best = r; }
     if(best !== state.guild.rank){
       state.guild.rank = best;
-      log(`Guild rank increased to ${best}.`);
+      log(`Guild rank increased to ${best}.`, 'story');
       if(best === 'D') storyOnce('rank_d', 'Your name starts showing up in conversations you were never part of.');
       if(best === 'B') storyOnce('rank_b', 'The guild master looks at you differently now—measuring, careful.');
     }
   }
 
-  function tryTriggerCaravanEvent(){
-    if(state.flags.foundCaravanEvent) return;
+  function buildCaravanEvent(){
+    const targets = [
+      {
+        id:'merchant',
+        name:'merchant convoy',
+        intro:'You spot a caravan of wagons stacked with trade goods.',
+        reward:{ gold:[80,140], charm:1 },
+        guardRiskMod: 0,
+      },
+      {
+        id:'refugee',
+        name:'refugee carts',
+        intro:'You spot weary families huddled near battered carts.',
+        reward:{ gold:[40,80], charm:2 },
+        guardRiskMod: 0.02,
+      },
+      {
+        id:'royal',
+        name:'royal carriage',
+        intro:'You spot a polished carriage bearing a royal crest, ringed by armored guards.',
+        reward:{ gold:[120,190], charm:2 },
+        guardRiskMod: -0.04,
+      },
+    ];
+
+    const attackers = [
+      { id:'bandits', name:'bandits', detail:'armed bandits', baseRisk:0.18, kind:'humanoid' },
+      { id:'wolves', name:'wolves', detail:'a pack of wolves', baseRisk:0.12, kind:'beast' },
+      { id:'boars', name:'boars', detail:'riled boars', baseRisk:0.10, kind:'beast' },
+      { id:'goblins', name:'goblins', detail:'sneering goblins', baseRisk:0.15, kind:'humanoid' },
+    ];
+
+    const target = randomFrom(targets);
+    const attacker = randomFrom(attackers);
+    const threatCount = Math.floor(rnd(2, 6));
+    const intro = `${target.intro} You count ${threatCount} ${attacker.detail} pressing the attack.`;
+
+    const baseRisk = clamp(attacker.baseRisk + (threatCount - 1) * 0.02 + (target.guardRiskMod || 0), 0.04, 0.45);
+    const options = [];
+
+    if(attacker.kind === 'humanoid'){
+      options.push({ id:'attack', label:'Charge in head-on', help:true, riskMod:0.02, log:'charge straight into the fray' });
+      options.push({ id:'flank', label:'Sneak and strike from behind', help:true, riskMod:-0.03, log:'slip around and strike from behind' });
+    } else {
+      options.push({ id:'drive', label:'Drive the beasts away', help:true, riskMod:0.01, log:'drive the beasts away with force' });
+      options.push({ id:'distract', label:'Create a distraction and herd them off', help:true, riskMod:-0.02, log:'cause a distraction and lure them off' });
+    }
+
+    if(target.id === 'royal'){
+      options.push({ id:'guards', label:'Coordinate with the guards', help:true, riskMod:-0.04, log:'coordinate with the guards and press the attackers' });
+    }
+
+    options.push({ id:'leave', label:'Leave them to it', help:false, riskMod:0, log:'leave the scene' });
+
+    return {
+      target,
+      attacker,
+      threatCount,
+      intro,
+      baseRisk,
+      options,
+    };
+  }
+
+  function triggerCaravanEvent(force=false){
+    if(state.flags.foundCaravanEvent && !force) return;
 
     const base = 0.02;
     const luckBoost = clamp(state.luck / 200, 0, 0.06);
     const chance = base + luckBoost;
 
-    if(Math.random() >= chance) return;
+    if(!force && Math.random() >= chance) return;
 
     state.flags.foundCaravanEvent = true;
-
-    const eligibleForNoble = (!world.story.landGrantEverUnlocked) && (state.age < ADULT_AGE) && (state.strength > 80);
-    const nobleChance = eligibleForNoble ? clamp(0.10 + (state.luck/150), 0.10, 0.35) : 0;
-
-    if(eligibleForNoble && Math.random() < nobleChance){
-      state.flags.savedNobleChild = true;
-      state.flags.landGrantPendingInvite = true;
-      log('Story: You find a carriage under attack. You intervene—fast, decisive. A terrified noble child survives because you were there.');
-      log('Story: Rumors spread faster than you can walk.');
-    } else {
-      log('Story: You find a wagon under attack. You help drive off the attackers and ensure the survivors reach the gates.');
-      log('Story: It feels like the world briefly notices you—and then keeps moving.');
-    }
+    state.caravanEvent = buildCaravanEvent();
+    state.eventLock = true;
+    showEventModal();
   }
 
   function grantLandAndUnlockTown(){
@@ -630,9 +704,9 @@ import { createActionsApi } from './actions.js';
     state.ownedTownId = slot.id;
     state.rentFree = true;
 
-    log('Story: After your next birthday, a royal messenger arrives. You are summoned.');
-    log(`Story: The king grants you land to oversee. A town will bear your family name: ${state.familyName}.`);
-    log('Story: Your rent is waived for the rest of this life.');
+    log('Story: After your next birthday, a royal messenger arrives. You are summoned.', 'story');
+    log(`Story: The king grants you land to oversee. A town will bear your family name: ${state.familyName}.`, 'story');
+    log('Story: Your rent is waived for the rest of this life.', 'story');
   }
 
   function completeTask(){
@@ -652,7 +726,7 @@ import { createActionsApi } from './actions.js';
       state.currentLocationId = 'town';
 
       pruneQueueForTownChange(dest);
-      log(`You travel from ${townLabel(getTownById(prev))} to ${townLabel(getTownById(dest))}.`);
+      log(`You travel from ${townLabel(getTownById(prev))} to ${townLabel(getTownById(dest))}.`, 'travel');
 
       ageUpIfNeeded();
       render();
@@ -685,7 +759,7 @@ import { createActionsApi } from './actions.js';
     if(action.id === 'register'){
       state.guild.registered = true;
       state.guild.rank = computeGuildStartRank(state);
-      log(`Guild registration complete. Starting rank: ${state.guild.rank}.`);
+      log(`Guild registration complete. Starting rank: ${state.guild.rank}.`, 'story');
       storyOnce('guild_registered', 'A stamped card and a quiet warning: the world is not kind to the unprepared.');
     }
 
@@ -693,16 +767,16 @@ import { createActionsApi } from './actions.js';
       action.onComplete(state);
       if(action.id === 'chooseClass'){
         const c = CLASSES.find(x=>x.id===state.classId);
-        log(`Class chosen: ${c ? c.name : state.classId}.`);
+        log(`Class chosen: ${c ? c.name : state.classId}.`, 'general');
       }
 
       if(action.id.startsWith('build')){
-        log('Story: The town changes. People notice. You are no longer just surviving; you are shaping.');
+        log('Story: The town changes. People notice. You are no longer just surviving; you are shaping.', 'story');
       }
 
       if(action.id.startsWith('smith')){
         storyOnce('blacksmith_first', 'The blacksmith weighs your materials like fate, then nods once: "It will hold."');
-        log(`Equipped: Weapon=${gearLabel(state.gear.weaponId)} · Armor=${gearLabel(state.gear.armorId)}`);
+        log(`Equipped: Weapon=${gearLabel(state.gear.weaponId)} · Armor=${gearLabel(state.gear.armorId)}`, 'general');
       }
 
       if(action.id === 'rentRoom'){
@@ -724,15 +798,15 @@ import { createActionsApi } from './actions.js';
 
       const gained = applyLoot(action.adventure.loot);
       if(gained.length>0){
-        log(`Loot: ${gained.map(x=>invLine(x.id,x.qty)).join(', ')}.`);
+        log(`Loot: ${gained.map(x=>invLine(x.id,x.qty)).join(', ')}.`, 'combat');
       }
 
-      if(action.adventure.travelLike) tryTriggerCaravanEvent();
+      if(action.adventure.travelLike) triggerCaravanEvent();
 
-      log(`Completed adventure safely. (Death chance was ${riskPct}%).`);
+      log(`Completed adventure safely. (Death chance was ${riskPct}%).`, 'combat');
       state.health = clamp(state.health - Math.floor(rnd(0,3)), 0, state.healthMax);
     } else {
-      log(`Completed: ${action.name}.`);
+      log(`Completed: ${action.name}.`, 'general');
     }
 
     state.task.running = false;
@@ -774,7 +848,7 @@ import { createActionsApi } from './actions.js';
     if(age === 10) storyOnce('age10', 'You start noticing what people avoid—certain roads, certain woods.');
     if(age === 12){
       storyOnce('age12', 'You step into your teen years. People start expecting more of you.');
-      log('Tip: You can register with the guild now (age 12+).');
+      log('Tip: You can register with the guild now (age 12+).', 'story');
     }
     if(age === 14) storyOnce('age14', 'You learn that "capable" is both praise and invitation to danger.');
     if(age === 16) storyOnce('age16', 'Adulthood arrives early in a world like this. Travel opens.');
@@ -802,24 +876,24 @@ import { createActionsApi } from './actions.js';
 
       if(state.stageIndex >= 2){
         if(state.rentFree){
-          log('Your land grant waives rent this life.');
+          log('Your land grant waives rent this life.', 'story');
         } else {
           const rent = (state.stageIndex === 2) ? 50 : 80;
           if(!state.homeLocked){
             if(state.gold >= rent){
               state.gold -= rent;
-              log(`You pay ${rent} gold to keep living at home.`);
+              log(`You pay ${rent} gold to keep living at home.`, 'story');
             } else {
               state.homeLocked = true;
               storyOnce('kicked_out', 'You learn the quiet brutality of bills: nothing personal, just final.');
-              log('You cannot afford rent. You are kicked out and lose access to Home.');
-              log('Tip: Earn gold and use "Rent a Room" in Town to restore access.');
+              log('You cannot afford rent. You are kicked out and lose access to Home.', 'story');
+              log('Tip: Earn gold and use "Rent a Room" in Town to restore access.', 'story');
             }
           }
         }
       }
 
-      log(`You age up. Now age ${state.age} (${state.stage}).`);
+      log(`You age up. Now age ${state.age} (${state.stage}).`, 'story');
       storyBeatOnAge(state.age);
 
       state.energyMax = clamp(state.energyMax + 1, 80, 140);
@@ -882,7 +956,7 @@ import { createActionsApi } from './actions.js';
           <div class="small">Family name: ${escapeHtml(s.familyName)} · Origin: ${escapeHtml(famBg)} · Class: ${escapeHtml(cls)}</div>
           <div class="small">Town: ${escapeHtml(townLabel(currentTown))}</div>
           <div class="small">Gear: ${escapeHtml(gearLabel(s.gear.weaponId))} · ${escapeHtml(gearLabel(s.gear.armorId))}</div>
-          <div class="small">Owned town: ${ownedTown ? escapeHtml(townLabel(ownedTown)) : 'None'}</div>
+          ${ownedTown ? `<div class="small">Owned town: ${escapeHtml(townLabel(ownedTown))}</div>` : ''}
         </div>
         <div>
           <div class="tag good">Meta Points Earned</div>
@@ -910,13 +984,84 @@ import { createActionsApi } from './actions.js';
 
   function closeModal(){ $('modalOverlay').style.display = 'none'; }
 
+  function showEventModal(){
+    const event = state?.caravanEvent;
+    if(!event) return;
+    $('eventTitle').textContent = 'Caravan Encounter';
+    $('eventBody').innerHTML = `
+      <div>${escapeHtml(event.intro)}</div>
+      <div class="small" style="margin-top:8px">Target: <span class="hl">${escapeHtml(event.target.name)}</span> · Attackers: <span class="hl">${escapeHtml(event.attacker.name)}</span></div>
+    `;
+    $('eventOptions').innerHTML = event.options.map((opt, idx)=>`
+      <button data-event-option="${idx}" class="${opt.help ? '' : 'secondary'}">${escapeHtml(opt.label)}</button>
+    `).join('');
+    $('eventOverlay').style.display = 'flex';
+  }
+
+  function closeEventModal(){
+    $('eventOverlay').style.display = 'none';
+  }
+
+  function resolveCaravanEvent(optionIndex){
+    const event = state?.caravanEvent;
+    if(!event) return;
+    const option = event.options[optionIndex];
+    closeEventModal();
+
+    state.eventLock = false;
+    state.caravanEvent = null;
+
+    if(!option || !option.help){
+      log('You decide not to intervene and continue on your way.', 'story');
+      render();
+      maybeStartNextFromQueue();
+      return;
+    }
+
+    const baseRisk = clamp(event.baseRisk + (option.riskMod || 0), 0.02, 0.65);
+    const chance = computeAdventureDeathChance(state, baseRisk);
+    const died = Math.random() < chance;
+    const riskPct = (chance * 100).toFixed(1);
+
+    if(died){
+      die(`Fell while trying to help the caravan (death chance was ${riskPct}%).`);
+      return;
+    }
+
+    log(`You ${option.log}, turning the tide.`, 'combat');
+
+    const rewardGold = Math.floor(rnd(event.target.reward.gold[0], event.target.reward.gold[1] + 1));
+    state.gold = clamp(state.gold + rewardGold, 0, 999999);
+    if(event.target.reward.charm){
+      applyStatGains({ charm: event.target.reward.charm });
+    }
+    log(`Caravan reward: +${rewardGold} gold.`, 'story');
+
+    const eligibleForNoble = (!world.story.landGrantEverUnlocked)
+      && (state.age < ADULT_AGE)
+      && (state.strength > 80)
+      && (event.target.id === 'royal');
+    const nobleChance = eligibleForNoble ? clamp(0.12 + (state.luck/150), 0.12, 0.4) : 0;
+
+    if(eligibleForNoble && Math.random() < nobleChance){
+      state.flags.savedNobleChild = true;
+      state.flags.landGrantPendingInvite = true;
+      log('Story: A royal survivor clings to your arm, shaken but alive. The guards will remember your name.', 'story');
+    } else {
+      log('Story: The survivors thank you before disappearing down the road.', 'story');
+    }
+
+    render();
+    maybeStartNextFromQueue();
+  }
+
   // ---------------------------
   // Save/Load
   // ---------------------------
   function saveGame(){
     if(!state) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ state, world, metaPoints }));
-    log('Game saved.');
+    log('Game saved.', 'general');
   }
 
   function loadGame(){
@@ -1017,7 +1162,9 @@ import { createActionsApi } from './actions.js';
   function renderActionCard(a, locId){
     if(!a.alwaysVisible && typeof a.minAge === 'number' && state.age < a.minAge) return '';
 
-    const r = a.requirements ? a.requirements(state) : req(true);
+    const r = state.eventLock
+      ? req(false, 'Resolve the caravan encounter first.')
+      : (a.requirements ? a.requirements(state) : req(true));
 
     let timeCost = a.timeCostMins || 0;
     if(a.special === 'travel') timeCost = getPlannedTravelCost();
@@ -1032,11 +1179,11 @@ import { createActionsApi } from './actions.js';
 
     const qFull = queueSize() >= 10;
     const homeLocked = (locId==='home' && state.homeLocked);
-    const disabled = homeLocked || !r.ok || !hasTime || (state.task.running && qFull);
+    const disabled = homeLocked || !r.ok || (state.task.running && qFull);
 
     let reqText = 'Ready.';
     if(homeLocked) reqText = 'Home is locked.';
-    else if(!hasTime) reqText = `Not enough stage time (need ${fmtTime(timeCost)}).`;
+    else if(!hasTime) reqText = `Will borrow ${fmtTime(timeCost - state.stageRemainingMins)} from next stage.`;
     else if(!r.ok) reqText = r.why;
     else if(state.task.running && !qFull) reqText = 'Will enqueue while your current task runs.';
     else if(state.task.running && qFull) reqText = 'Queue is full.';
@@ -1057,7 +1204,7 @@ import { createActionsApi } from './actions.js';
     }
 
     const queueAllowed = !!a.queueable && locId === 'home';
-    const btnQDisabled = homeLocked || !r.ok || !hasTime || qFull;
+    const btnQDisabled = homeLocked || !r.ok || qFull;
 
     const mainLabel = disabled
       ? 'Unavailable'
@@ -1093,35 +1240,43 @@ import { createActionsApi } from './actions.js';
     const t = getTownById(state.currentTownId);
     const ownedTown = state.ownedTownId ? getTownById(state.ownedTownId) : null;
 
-    $('worldLine').innerHTML = `Current town: <span class="hl mono">${escapeHtml(townLabel(t))}</span> · Owned town: <span class="hl mono">${escapeHtml(ownedTown ? townLabel(ownedTown) : 'None')}</span>`;
-
-    $('charKpi').innerHTML = `
-      <span class="pill"><span class="mono">Name</span> <b class="mono">${escapeHtml(state.name)}</b></span>
-      <span class="pill"><span class="mono">Gender</span> <b class="mono">${escapeHtml(displayGender(state))}</b></span>
-      <span class="pill"><span class="mono">Age</span> <b class="mono">${state.age}</b></span>
-      <span class="pill"><span class="mono">Stage</span> <b class="mono">${escapeHtml(state.stage)}</b></span>
-      <span class="pill"><span class="mono">Family</span> <b class="mono">${escapeHtml(state.familyName)}</b></span>
-      <span class="pill"><span class="mono">Class</span> <b class="mono">${escapeHtml(className)}</b></span>
-      <span class="pill"><span class="mono">Weapon</span> <b class="mono">${escapeHtml(weaponName)}</b></span>
-      <span class="pill"><span class="mono">Armor</span> <b class="mono">${escapeHtml(armorName)}</b></span>
-      <span class="pill"><span class="mono">Gold</span> <b class="mono">${state.gold}</b></span>
-      <span class="pill"><span class="mono">Guild</span> <b class="mono">${state.guild.registered ? `Rank ${state.guild.rank}` : 'Not registered'}</b></span>
-      <span class="pill"><span class="mono">Meta</span> <b class="mono">${metaPoints}</b></span>
-    `;
-
-    const stats = [
-      {k:'intelligence', label:'Intelligence'},
-      {k:'strength', label:'Strength'},
-      {k:'magic', label:'Magic'},
-      {k:'charm', label:'Charm'},
-      {k:'luck', label:'Luck'},
-      {k:'energy', label:`Energy / ${state.energyMax}`},
-      {k:'health', label:`Health / ${state.healthMax}`},
+    const worldLineParts = [
+      `Current town: <span class="hl mono">${escapeHtml(townLabel(t))}</span>`
     ];
-    $('statGrid').innerHTML = stats.map(s=>{
-      const val = (s.k==='energy') ? `${state.energy}` : (s.k==='health') ? `${state.health}` : `${state[s.k]}`;
-      return `<div class="stat"><div class="label">${escapeHtml(s.label)}</div><div class="value mono">${escapeHtml(val)}</div></div>`;
-    }).join('');
+    if(ownedTown){
+      worldLineParts.push(`Owned town: <span class="hl mono">${escapeHtml(townLabel(ownedTown))}</span>`);
+    }
+    $('worldLine').innerHTML = worldLineParts.join(' · ');
+
+    const charEntries = [
+      { label:'Name', value: state.name },
+      { label:'Gender', value: displayGender(state) },
+      { label:'Age', value: `${state.age} (${state.stage})` },
+      { label:'Family', value: state.familyName },
+      { label:'Gold', value: `${state.gold}` },
+      { label:'Guild', value: state.guild.registered ? `Rank ${state.guild.rank}` : 'Not registered' },
+      { label:'Intelligence', value: `${state.intelligence}` },
+      { label:'Strength', value: `${state.strength}` },
+      { label:'Magic', value: `${state.magic}` },
+      { label:'Charm', value: `${state.charm}` },
+      { label:'Luck', value: `${state.luck}` },
+      { label:'Energy', value: `${state.energy} / ${state.energyMax}` },
+      { label:'Health', value: `${state.health} / ${state.healthMax}` },
+    ];
+    if(state.classId !== 'none') charEntries.splice(4, 0, { label:'Class', value: className });
+    if(state.gear?.weaponId && state.gear.weaponId !== 'none') charEntries.push({ label:'Weapon', value: weaponName });
+    if(state.gear?.armorId && state.gear.armorId !== 'none') charEntries.push({ label:'Armor', value: armorName });
+
+    $('charList').innerHTML = `
+      <div class="infoList">
+        ${charEntries.map(entry=>`
+          <div class="rowLine">
+            <span class="label">${escapeHtml(entry.label)}</span>
+            <span class="mono">${escapeHtml(entry.value)}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
 
     renderInventory();
 
@@ -1150,12 +1305,15 @@ import { createActionsApi } from './actions.js';
     let extraPanel = '';
     if(loc.id === 'travel'){
       const towns = visibleTownsIncludingOwnedUnnamed();
+      if(!state.travelPlanDest || !towns.some(tt=>tt.id===state.travelPlanDest)){
+        state.travelPlanDest = state.currentTownId || towns[0]?.id || null;
+      }
       extraPanel = `
         <div class="note small">
           <div><span class="tag">Travel</span> Available at age <b>${ADULT_AGE}+</b>.</div>
           <div style="margin-top:6px">Select destination:</div>
           <select id="selTravelTo" style="margin-top:6px">
-            ${towns.map(tt=>`<option value="${tt.id}" ${tt.id===state.currentTownId?'selected':''}>${escapeHtml(townLabel(tt))}</option>`).join('')}
+            ${towns.map(tt=>`<option value="${tt.id}" ${tt.id===state.travelPlanDest?'selected':''}>${escapeHtml(townLabel(tt))}</option>`).join('')}
           </select>
           <div class="small" style="margin-top:6px">Travel time cost: <span class="hl mono">${fmtTime(getPlannedTravelCost()||0)}</span> · Real time: <span class="mono">10s</span></div>
           <div class="small" style="margin-top:6px">Queued actions that do not exist in the destination town will be removed automatically.</div>
@@ -1208,7 +1366,18 @@ import { createActionsApi } from './actions.js';
       </div>
     `;
 
-    $('log').innerHTML = state.log.map(e=>{
+    const filters = state.logFilters || { queue:true, combat:true, story:true, travel:true };
+    $('logFilters').innerHTML = LOG_FILTERS.map(f=>`
+      <button class="filterBtn ${filters[f.id] ? 'active' : ''}" data-filter="${f.id}">${escapeHtml(f.label)}</button>
+    `).join('');
+    const visibleLogs = state.log.filter(e=>{
+      const type = e.type || 'general';
+      if(Object.prototype.hasOwnProperty.call(filters, type)){
+        return !!filters[type];
+      }
+      return true;
+    });
+    $('log').innerHTML = visibleLogs.map(e=>{
       return `<div class="entry"><div class="t">${escapeHtml(e.t)}</div><div>${escapeHtml(e.msg)}</div></div>`;
     }).join('');
 
@@ -1276,11 +1445,11 @@ import { createActionsApi } from './actions.js';
     ensureStageTime(state);
 
     state.log = [];
-    log(`You begin a new life at age ${state.age}.`);
-    log(`Family name: ${state.familyName}. Origin: ${fam.name}.`);
-    log(`You are born in ${townLabel(startTown)}.`);
+    log(`You begin a new life at age ${state.age}.`, 'story');
+    log(`Family name: ${state.familyName}. Origin: ${fam.name}.`, 'story');
+    log(`You are born in ${townLabel(startTown)}.`, 'story');
     storyOnce('life_start', 'A familiar feeling you cannot name—like waking from a dream you already lived.');
-    log('Tip: Queue Home actions with x5/x10 to reduce clicking.');
+    log('Tip: Queue Home actions with x5/x10 to reduce clicking.', 'story');
 
     localStorage.removeItem(STORAGE_KEY);
     render();
@@ -1328,7 +1497,7 @@ import { createActionsApi } from './actions.js';
 
       if(mode === 'q'){
         if(!queueAllowed){
-          log('This action cannot be queued.');
+          log('This action cannot be queued.', 'queue');
           return;
         }
         const n = parseInt(btn.getAttribute('data-q')||'1',10);
@@ -1340,12 +1509,19 @@ import { createActionsApi } from './actions.js';
         if(queueAllowed){
           enqueueAction(locId, actionId, 1);
         } else {
-          log('Finish the current task before starting this action.');
+          log('Finish the current task before starting this action.', 'queue');
         }
         return;
       }
 
       startTask(action, locId);
+    });
+
+    $('locationPanel').addEventListener('change', (e)=>{
+      const sel = e.target.closest('#selTravelTo');
+      if(!sel) return;
+      state.travelPlanDest = sel.value;
+      render();
     });
 
     $('queueList').addEventListener('click', (e)=>{
@@ -1355,18 +1531,32 @@ import { createActionsApi } from './actions.js';
       if(Number.isFinite(idx)) removeQueueIndex(idx);
     });
 
+    $('logFilters').addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-filter]');
+      if(!btn) return;
+      const id = btn.getAttribute('data-filter');
+      state.logFilters[id] = !state.logFilters[id];
+      render();
+    });
+
     $('btnClearQueue').addEventListener('click', ()=>{ if(!state.task.running) clearQueue(); });
 
     $('btnAgeUp').addEventListener('click', ()=>{
       if(state.task.running) return;
       state.stageRemainingMins = 0;
-      log('You skip ahead. (Less time means fewer gains.)');
+      log('You skip ahead. (Less time means fewer gains.)', 'general');
       ageUpIfNeeded();
       render();
       maybeStartNextFromQueue();
     });
 
     $('btnSave').addEventListener('click', saveGame);
+
+    $('btnTriggerEvent').addEventListener('click', ()=>{
+      if(!state || state.task.running) return;
+      triggerCaravanEvent(true);
+      render();
+    });
 
     function downloadSaveFile(){
       if(!state) return;
@@ -1402,6 +1592,10 @@ import { createActionsApi } from './actions.js';
       state.guild = state.guild || { registered:false, rank:'F', xp:0, questsCompleted:0 };
       state.gear = state.gear || { weaponId:'none', armorId:'none' };
       state.task = { running:false, actionId:null, actionName:null, startedAt:0, durationMs:0, locationId:null, townId:null };
+      state.logFilters = state.logFilters || { queue:true, combat:true, story:true, travel:true };
+      state.eventLock = false;
+      state.caravanEvent = null;
+      state.travelPlanDest = state.travelPlanDest || null;
       if(!state.currentTownId){
         const startTown = randomFrom(world.towns.filter(t=>t.unlocked && t.name));
         state.currentTownId = startTown.id;
@@ -1409,7 +1603,7 @@ import { createActionsApi } from './actions.js';
       state.currentLocationId = state.currentLocationId || 'home';
       ensureStageTime(state);
 
-      log('Save loaded.');
+      log('Save loaded.', 'general');
       render();
       maybeStartNextFromQueue();
     }
@@ -1417,7 +1611,7 @@ import { createActionsApi } from './actions.js';
     $('btnDownload').addEventListener('click', ()=>{
       saveGame();
       downloadSaveFile();
-      log('Save exported.');
+      log('Save exported.', 'general');
     });
 
     $('btnLoad').addEventListener('click', ()=>{
@@ -1456,6 +1650,13 @@ import { createActionsApi } from './actions.js';
     $('modalOverlay').addEventListener('click', (e)=>{
       if(e.target === $('modalOverlay')) closeModal();
     });
+
+    $('eventOptions').addEventListener('click', (e)=>{
+      const btn = e.target.closest('[data-event-option]');
+      if(!btn) return;
+      const idx = parseInt(btn.getAttribute('data-event-option'),10);
+      if(Number.isFinite(idx)) resolveCaravanEvent(idx);
+    });
   }
 
   // ---------------------------
@@ -1464,9 +1665,9 @@ import { createActionsApi } from './actions.js';
   function runDomTests(){
     const required = [
       'screenLanding','screenGame','btnStart','btnResetMeta','selFamily','selGender','inpFamilyName',
-      'mapTabs','locationPanel','queueList','btnClearQueue','btnAgeUp',
+      'mapTabs','locationPanel','queueList','btnClearQueue','btnAgeUp','charList','logFilters','btnTriggerEvent',
       'btnSave','btnDownload','btnLoad','fileLoad','btnAbandon',
-      'modalOverlay','btnRestart','btnCloseModal'
+      'modalOverlay','btnRestart','btnCloseModal','eventOverlay','eventTitle','eventBody','eventOptions'
     ];
     const missing = required.filter(id=>!$(id));
     if(missing.length){
@@ -1512,6 +1713,10 @@ import { createActionsApi } from './actions.js';
       state.guild = state.guild || { registered:false, rank:'F', xp:0, questsCompleted:0 };
       state.gear = state.gear || { weaponId:'none', armorId:'none' };
       state.task = { running:false, actionId:null, actionName:null, startedAt:0, durationMs:0, locationId:null, townId:null };
+      state.logFilters = state.logFilters || { queue:true, combat:true, story:true, travel:true };
+      state.eventLock = false;
+      state.caravanEvent = null;
+      state.travelPlanDest = state.travelPlanDest || null;
       if(!state.currentTownId){
         const startTown = randomFrom(world.towns.filter(t=>t.unlocked && t.name));
         state.currentTownId = startTown.id;
@@ -1526,7 +1731,7 @@ import { createActionsApi } from './actions.js';
 
     if(state && state.task && state.task.running){
       state.task.running = false;
-      log('A previous task was interrupted (reload). Task cancelled.');
+      log('A previous task was interrupted (reload). Task cancelled.', 'general');
     }
 
     $('selFamily').addEventListener('change', ()=>{
