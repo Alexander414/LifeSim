@@ -39,6 +39,11 @@ main{padding:18px; max-width:1400px; margin:0 auto}
 .kpi{display:flex; flex-wrap:wrap; gap:8px}
 .kpi .pill b{color:var(--text)}
 
+.infoList{line-height:1.7}
+.infoList .rowLine{display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px dashed var(--border)}
+.infoList .rowLine:last-child{border-bottom:none}
+.infoList .label{color:var(--muted)}
+
 .statgrid{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px}
 .stat{padding:10px; border-radius:12px; border:1px solid var(--border); background: rgba(0,0,0,0.18)}
 .stat .label{font-size:11px; color:var(--muted)}
@@ -125,3 +130,9 @@ button:disabled{opacity:.45; cursor:not-allowed}
 #queueList{max-height: 260px; overflow: auto; padding-right: 6px;}
 
 .note{padding:10px; border-radius:12px; border:1px solid var(--border); background: rgba(0,0,0,0.16)}
+
+.smallBtn{font-size:11px; padding:6px 10px; border-radius:10px}
+
+.logFilters{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px}
+.filterBtn{padding:6px 10px; border-radius:999px; border:1px solid var(--border); font-size:11px; color:var(--muted); background: rgba(255,255,255,0.04)}
+.filterBtn.active{background: rgba(96,165,250,0.18); color: var(--text)}
