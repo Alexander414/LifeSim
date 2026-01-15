@@ -6,6 +6,16 @@
   const SAVE_KEY = "ll_v4_save";
 
   const ADULT_AGE = 16;
+  const TRAVEL_MINS_PER_UNIT = 120;
+
+  const TOWNS = [
+    { id: "london", name: "London", x: 0, y: 0, visible: true },
+    { id: "york", name: "York", x: 0, y: 3, visible: true },
+    { id: "bristol", name: "Bristol", x: -2, y: -1, visible: true },
+    { id: "canterbury", name: "Canterbury", x: 1, y: -2, visible: true },
+    { id: "hidden_grant", name: null, x: 3, y: 1, visible: false },
+    { id: "hidden_future", name: null, x: -4, y: 2, visible: false },
+  ];
 
   const FAMILIES = [
     { id: "humble", name: "Humble Home", desc: "Balanced start.", mods: { gold: 20 } },
@@ -60,12 +70,24 @@
       health: 100,
 
       gold: 20,
+      rentCost: 10,
+
+      townId: null,
+      world: { towns: [] },
+      guildRegistered: false,
 
       queue: [], // { locId, actionId }
-      task: { running: false, locId: null, actionId: null, name: null, startedAt: 0, durationMs: 0 },
+      task: { running: false, locId: null, actionId: null, name: null, data: null, startedAt: 0, durationMs: 0 },
 
       // Story flags (town/land grant will come later)
-      story: { },
+      story: {
+        royalCaravanSeen: false,
+        royalCaravanResolved: false,
+        pendingLandInvite: false,
+        landGranted: false,
+      },
+
+      encounter: { active: false, data: null },
 
       // Log is stored as typed entries
       log: [],
@@ -92,6 +114,46 @@
     return String(s.gender || "");
   }
 
+  function buildWorld() {
+    return { towns: TOWNS.map(t => ({ ...t })) };
+  }
+
+  function listVisibleTowns(world) {
+    return (world && world.towns || []).filter(t => t.visible && t.name);
+  }
+
+  function randomVisibleTown(world) {
+    const visible = listVisibleTowns(world);
+    return visible.length ? randItem(visible) : null;
+  }
+
+  function townById(world, id) {
+    return (world && world.towns || []).find(t => t.id === id) || null;
+  }
+
+  function distanceUnits(world, fromId, toId) {
+    const from = townById(world, fromId);
+    const to = townById(world, toId);
+    if (!from || !to) return 0;
+    const dx = from.x - to.x;
+    const dy = from.y - to.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function travelTimeMins(world, fromId, toId) {
+    const dist = distanceUnits(world, fromId, toId);
+    return Math.max(30, Math.ceil(dist * TRAVEL_MINS_PER_UNIT));
+  }
+
+  function revealGrantTown(world, familyName) {
+    if (!world || !world.towns) return null;
+    const town = world.towns.find(t => t.id === "hidden_grant");
+    if (!town) return null;
+    town.visible = true;
+    town.name = familyName;
+    return town;
+  }
+
   function saveLocal(snapshot) {
     localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
   }
@@ -110,7 +172,9 @@
   // Public API
   window.LL_STATE = {
     ADULT_AGE,
+    TRAVEL_MINS_PER_UNIT,
     FAMILIES,
+    TOWNS,
     clamp,
     generateFamilyName,
     defaultMeta,
@@ -118,6 +182,13 @@
     freshState,
     applyFamilyMods,
     displayGender,
+    buildWorld,
+    listVisibleTowns,
+    randomVisibleTown,
+    townById,
+    distanceUnits,
+    travelTimeMins,
+    revealGrantTown,
     saveLocal,
     loadLocal,
     clearLocalAll,

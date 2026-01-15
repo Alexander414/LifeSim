@@ -53,15 +53,28 @@
           energyCost: 10,
           effects: (s) => { s.charm += 2; s.gold += 18; }
         },
+        {
+          id: "roaderrand",
+          name: "Road Errand",
+          meta: "Deliver supplies along the outskirts. Risky routes.",
+          timeCostMins: 240,
+          durationSec: 6,
+          energyCost: 12,
+          encounterRisk: 0.18,
+          effects: (s) => { s.charm += 1; s.gold += 28; s.luck += 1; }
+        },
       ],
       guild: [
         {
-          id: "placeholder",
-          name: "Guild (Coming Next)",
-          meta: "Guild system, ranks, and quests will be added next.",
-          timeCostMins: 0,
-          durationSec: 1,
-          effects: () => {}
+          id: "registry",
+          name: "Guild Registry",
+          meta: "Register to access contracts and quests.",
+          timeCostMins: 60,
+          durationSec: 4,
+          minAge: 12,
+          alwaysVisible: true,
+          lockedReason: "Minimum age 12. Parents will not allow earlier.",
+          effects: (s) => { s.guildRegistered = true; }
         }
       ]
     };
@@ -71,7 +84,8 @@
     return [
       { id: "home", name: "Home", desc: "Rest, study, and train." },
       { id: "town", name: "Town", desc: "Odd jobs and services." },
-      { id: "guild", name: "Guild", desc: "Register and take quests (next layer)." },
+      { id: "guild", name: "Guild", desc: "Register and take quests (next layer).", alwaysVisible: true },
+      { id: "travel", name: "Travel", desc: "Move between towns once you reach adulthood.", minAge: 16, hideWhenLocked: true },
     ];
   }
 
